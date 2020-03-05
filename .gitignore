@@ -1,0 +1,13 @@
+#ignore compiled files
+*.ko
+*.cmd
+*.symvers
+*.order
+*.mod
+*.mod.o
+*.mod.c
+*.o
+/user/user
+
+#ignore char device files
+./user/timed-msg-system*
