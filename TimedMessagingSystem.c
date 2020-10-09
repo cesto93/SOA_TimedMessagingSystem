@@ -175,6 +175,10 @@ static ssize_t dev_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 
 	mutex_lock(&(msg_buffer->operation_synchronizer));
 
+	if (llist_empty(msg_buffer->msg_list)) {
+		return 0;
+	}
+
 	//get the msg
 	my_node = llist_del_first(msg_buffer->msg_list);
 	my_msg_node = llist_entry(my_node, msg_node, node);
