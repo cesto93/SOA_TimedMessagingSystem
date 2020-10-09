@@ -51,6 +51,7 @@ void *reading(void * path){
 	msg = malloc(SIZE);
 	//for (i = 0; i < 100; i++) 
 		size = read(fd, msg, MAXSIZE);
+		puts(msg);
 		if (size == -1) {
 			perror("error on read");
 			return NULL;
