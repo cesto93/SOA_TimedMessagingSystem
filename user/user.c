@@ -27,7 +27,7 @@ void *writing(void * path){
 	}
 	printf("device %s successfully opened\n", device);
 	ioctl(fd,1);
-	//for (i = 0; i < 100; i++) 
+	for (i = 0; i < 100; i++) 
 		write(fd, DATA, SIZE);
 	return NULL;
 }
@@ -49,13 +49,14 @@ void *reading(void * path){
 	printf("device %s successfully opened\n", device);
 	ioctl(fd,1);
 	msg = malloc(SIZE);
-	//for (i = 0; i < 100; i++) 
+	for (i = 0; i < 100; i++) { 
 		size = read(fd, msg, MAXSIZE);
 		puts(msg);
 		if (size == -1) {
 			perror("error on read");
 			return NULL;
 		}		
+	}
 	return NULL;
 }
 
