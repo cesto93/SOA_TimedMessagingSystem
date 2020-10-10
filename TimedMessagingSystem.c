@@ -194,6 +194,9 @@ static ssize_t dev_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 
 	
 	ret = copy_to_user(buff, &my_msg_node->msg, len);
+
+	kfree(my_msg_node->msg);
+	kfree(my_msg_node);
   
 	//*off += (len - ret);
 	mutex_unlock(&(msg_buffer->operation_synchronizer));
@@ -242,9 +245,11 @@ int init_module(void) {
 
 		msg_buffers[i].read_timeout = 0;
 		msg_buffers[i].write_timeout = 0;
-
 		msg_buffers[i].msg_list = kmalloc(sizeof(struct llist_head), GFP_KERNEL);
 		init_llist_head(msg_buffers[i].msg_list);
+		msg_buffers[i].pending_list = kmalloc(sizeof(struct llist_head), GFP_KERNEL);
+		init_llist_head(msg_buffers[i].pending_list);
+
 
 	}
 	queue = alloc_workqueue("timed-msg-system", WQ_UNBOUND, 32);
@@ -262,8 +267,18 @@ int init_module(void) {
 
 void cleanup_module(void) {
 	int i;
-	for(i=0; i < MINORS; i++) {
-		//TODO free msg list
+	pending_data_node * pending_data;
+	msg_node * msg_node;
+
+	for(i = 0; i < MINORS; i++) {
+		llist_for_each_entry(pending_data, msg_buffers[i].pending_list->first, node) {
+			kfree(pending_data->msg);
+			kfree(pending_data);
+		}
+		llist_for_each_entry(msg_node, msg_buffers[i].msg_list->first, node) {
+			kfree(msg_node->msg);
+			kfree(msg_node);
+		}
 
 	}
 

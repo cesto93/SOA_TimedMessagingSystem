@@ -54,7 +54,7 @@ void *reading(void * path){
 	for (i = 0; i < 10; i++) { 
 		puts("reading");
 		size = read(fd, msg, MAXSIZE);
-		puts(msg);
+		printf("readed: %s", msg);
 		if (size == -1) {
 			perror("error on read");
 			return NULL;
