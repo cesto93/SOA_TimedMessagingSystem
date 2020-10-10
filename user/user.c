@@ -28,8 +28,8 @@ void *writing(void * path){
 	printf("device %s successfully opened\n", device);
 	//ioctl(fd,1);
 	for (i = 0; i < 10; i++) {
-		puts("writing");
 		write(fd, DATA, SIZE);
+		printf("writed: %s", DATA);
 	}
 	return NULL;
 }
@@ -52,7 +52,6 @@ void *reading(void * path){
 	ioctl(fd,1);
 	msg = malloc(SIZE);
 	for (i = 0; i < 10; i++) { 
-		puts("reading");
 		size = read(fd, msg, MAXSIZE);
 		printf("readed: %s", msg);
 		if (size == -1) {

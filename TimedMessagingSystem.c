@@ -27,12 +27,6 @@ static int Major;	/* Major number assigned to broadcast device driver */
 #define get_major(session)	MAJOR(session->f_inode->i_rdev)
 #define get_minor(session)	MINOR(session->f_inode->i_rdev)
 
-typedef struct msg_node {
-	char * msg;
-	int len;
-	struct llist_node node;
-} msg_node;
-
 typedef struct _msg_state{
 	struct mutex operation_synchronizer;
 	struct llist_head * msg_list;
@@ -41,13 +35,11 @@ typedef struct _msg_state{
 	long write_timeout;
 } msg_state;
 
-#define MINORS 8
-msg_state msg_buffers[MINORS];
-#define OBJECT_MAX_SIZE  (4096) //just one page
-
-#define SET_SEND_TIMEOUT 0
-#define SET_RECV_TIMEOUT 1
-#define REVOKE_DELAYED_MESSAGES 2
+typedef struct msg_node {
+	char * msg;
+	int len;
+	struct llist_node node;
+} msg_node;
 
 // PENDING WRITE DATA
 typedef struct pending_data_node {
@@ -56,6 +48,14 @@ typedef struct pending_data_node {
 	int len;
 	struct llist_node node;
 } pending_data_node;
+
+#define MINORS 8
+msg_state msg_buffers[MINORS];
+#define OBJECT_MAX_SIZE  (4096) //just one page
+
+#define SET_SEND_TIMEOUT 0
+#define SET_RECV_TIMEOUT 1
+#define REVOKE_DELAYED_MESSAGES 2
 
 typedef struct work_data{
 	struct llist_head * pending_list;
@@ -254,7 +254,7 @@ int init_module(void) {
 	}
 	queue = alloc_workqueue("timed-msg-system", WQ_UNBOUND, 32);
 
-	Major = __register_chrdev(0, 0, 256, DEVICE_NAME, &fops);	//allowed minors are directly controlled within this driver
+	Major = __register_chrdev(0, 0, 256, DEVICE_NAME, &fops); //allowed minors are directly controlled within this driver
 
 	if (Major < 0) {
 	  printk("%s: registering device failed\n", MODNAME);
