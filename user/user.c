@@ -17,7 +17,7 @@ void *writing(void * path){
 	int fd;
 
 	device = (char*) path;
-	sleep(1);
+	//sleep(1);
 
 	printf("opening device %s\n", device);
 	fd = open(device, O_RDWR);

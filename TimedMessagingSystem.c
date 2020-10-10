@@ -180,16 +180,8 @@ static ssize_t dev_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 		len = my_msg_node->len;
 
 	printk("msg_readed: %s\n", my_msg_node->msg);
-
-	/*if (*off > msg_len) {
-		mutex_unlock(&(msg_buffer->operation_synchronizer));
-		return 0;
-	} 
-	if ((msg_len - *off) < len) 
-		len = msg_len - *off;*/
-
 	
-	ret = copy_to_user(buff, &my_msg_node->msg, len);
+	ret = copy_to_user(buff, my_msg_node->msg, len);
 
 	kfree(my_msg_node->msg);
 	kfree(my_msg_node);
