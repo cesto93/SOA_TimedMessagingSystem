@@ -29,7 +29,7 @@ void *writing(void * path){
 	//ioctl(fd,1);
 	for (i = 0; i < 10; i++) {
 		write(fd, DATA, SIZE);
-		printf("writed: %s", DATA);
+		printf("writed: %s\n", DATA);
 	}
 	return NULL;
 }
@@ -53,7 +53,7 @@ void *reading(void * path){
 	msg = malloc(SIZE);
 	for (i = 0; i < 10; i++) { 
 		size = read(fd, msg, MAXSIZE);
-		printf("readed: %s", msg);
+		printf("readed: %s\n", msg);
 		if (size == -1) {
 			perror("error on read");
 			return NULL;

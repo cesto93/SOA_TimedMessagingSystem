@@ -27,13 +27,13 @@ static int Major;	/* Major number assigned to broadcast device driver */
 #define get_major(session)	MAJOR(session->f_inode->i_rdev)
 #define get_minor(session)	MINOR(session->f_inode->i_rdev)
 
-typedef struct _msg_state{
+typedef struct _session{
 	struct mutex operation_synchronizer;
-	struct llist_head * msg_list;
-	struct llist_head * pending_list;
+	struct llist_head msg_list;
+	struct llist_head pending_list;
 	long read_timeout;
 	long write_timeout;
-} msg_state;
+} session;
 
 typedef struct msg_node {
 	char * msg;
@@ -43,14 +43,14 @@ typedef struct msg_node {
 
 // PENDING WRITE DATA
 typedef struct pending_data_node {
-	msg_state * msg_storage;
+	session * msg_storage;
 	char * msg;
 	int len;
 	struct llist_node node;
 } pending_data_node;
 
 #define MINORS 8
-msg_state msg_buffers[MINORS];
+session msg_buffers[MINORS];
 #define OBJECT_MAX_SIZE  (4096) //just one page
 
 #define SET_SEND_TIMEOUT 0
@@ -74,7 +74,7 @@ void deffered_write(struct delayed_work *work) {
 	new->msg = pending_data->msg;
 	new->len = pending_data->len; 
 
-	llist_add(&new->node, pending_data->msg_storage->msg_list);
+	llist_add(&new->node, &pending_data->msg_storage->msg_list);
 
 	/*int ret = copy_from_user(r_node->source, r_node->msg_buffer->buffer, r_node->len);
 	if (ret != r_node->len) {
@@ -111,7 +111,7 @@ static int dev_release(struct inode *inode, struct file *file) {
 static ssize_t dev_write(struct file *filp, const char *buff, size_t len, loff_t *off) {
 	int minor = get_minor(filp);
 	int ret;
-	msg_state *my_msg_buffer;
+	session *my_msg_buffer;
 	pending_data_node * pending_node;
 	work_data * wdata;
 
@@ -143,15 +143,16 @@ static ssize_t dev_write(struct file *filp, const char *buff, size_t len, loff_t
 		ret = copy_from_user(node->msg, buff, len);	
 		node->len = ret;
 
-		llist_add(&node->node, my_msg_buffer->msg_list);
+		llist_add(&node->node, &my_msg_buffer->msg_list);
 	} else {
 		pending_node = kmalloc(sizeof(pending_data_node), GFP_KERNEL);
 		pending_node->msg = kmalloc(len, GFP_KERNEL);
 		ret = copy_from_user(pending_node->msg, buff, len);
 		pending_node->len = ret;
+		llist_add(&pending_node->node, &my_msg_buffer->pending_list);
 
 		wdata = kmalloc(sizeof(pending_data_node), GFP_KERNEL);
-		wdata->pending_list = my_msg_buffer->pending_list;
+		wdata->pending_list = &my_msg_buffer->pending_list;
 		INIT_DELAYED_WORK(&wdata->my_work, (void *) deffered_write);
 		queue_delayed_work(queue, &wdata->my_work, my_msg_buffer->write_timeout);
 	}
@@ -166,7 +167,7 @@ static ssize_t dev_write(struct file *filp, const char *buff, size_t len, loff_t
 static ssize_t dev_read(struct file *filp, char *buff, size_t len, loff_t *off) {
 	int minor = get_minor(filp);
 	int ret;
-	msg_state * msg_buffer;
+	session * msg_buffer;
 	struct llist_node * my_node;
 	msg_node * my_msg_node;
 
@@ -175,12 +176,13 @@ static ssize_t dev_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 
 	mutex_lock(&(msg_buffer->operation_synchronizer));
 
-	if (llist_empty(msg_buffer->msg_list)) {
+	if (llist_empty(&msg_buffer->msg_list)) {
+		mutex_unlock(&(msg_buffer->operation_synchronizer));
 		return 0;
 	}
 
 	//get the msg
-	my_node = llist_del_first(msg_buffer->msg_list);
+	my_node = llist_del_first(&msg_buffer->msg_list);
 	my_msg_node = llist_entry(my_node, msg_node, node);
 	if (len > my_msg_node->len)
 		len = my_msg_node->len;
@@ -206,7 +208,7 @@ static ssize_t dev_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 
 static long dev_ioctl(struct file *filp, unsigned int command, unsigned long param) {
 	int minor = get_minor(filp);
-	msg_state *msg_buffer;
+	session *msg_buffer;
 
 	msg_buffer = msg_buffers + minor;
 	switch(command) {
@@ -245,10 +247,8 @@ int init_module(void) {
 
 		msg_buffers[i].read_timeout = 0;
 		msg_buffers[i].write_timeout = 0;
-		msg_buffers[i].msg_list = kmalloc(sizeof(struct llist_head), GFP_KERNEL);
-		init_llist_head(msg_buffers[i].msg_list);
-		msg_buffers[i].pending_list = kmalloc(sizeof(struct llist_head), GFP_KERNEL);
-		init_llist_head(msg_buffers[i].pending_list);
+		init_llist_head(&msg_buffers[i].msg_list);
+		init_llist_head(&msg_buffers[i].pending_list);
 
 
 	}
@@ -271,11 +271,11 @@ void cleanup_module(void) {
 	msg_node * msg_node;
 
 	for(i = 0; i < MINORS; i++) {
-		llist_for_each_entry(pending_data, msg_buffers[i].pending_list->first, node) {
+		llist_for_each_entry(pending_data, msg_buffers[i].pending_list.first, node) {
 			kfree(pending_data->msg);
 			kfree(pending_data);
 		}
-		llist_for_each_entry(msg_node, msg_buffers[i].msg_list->first, node) {
+		llist_for_each_entry(msg_node, msg_buffers[i].msg_list.first, node) {
 			kfree(msg_node->msg);
 			kfree(msg_node);
 		}
