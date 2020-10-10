@@ -76,18 +76,9 @@ void deffered_write(struct delayed_work *work) {
 
 	llist_add(&new->node, &pending_data->msg_storage->msg_list);
 
-	/*int ret = copy_from_user(r_node->source, r_node->msg_buffer->buffer, r_node->len);
-	if (ret != r_node->len) {
-		printk("deffered_write can't write all the data");
-	}*/
-
-
-
 	kfree(pending_data);
 	kfree(data);
 }
-
-// the actual driver
 
 static int dev_open(struct inode *inode, struct file *file) {
 	int minor = get_minor(file);
@@ -181,11 +172,14 @@ static ssize_t dev_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 		return 0;
 	}
 
+
 	//get the msg
 	my_node = llist_del_first(&msg_buffer->msg_list);
 	my_msg_node = llist_entry(my_node, msg_node, node);
 	if (len > my_msg_node->len)
 		len = my_msg_node->len;
+
+	printk("msg_readed: %s\n", my_msg_node->msg);
 
 	/*if (*off > msg_len) {
 		mutex_unlock(&(msg_buffer->operation_synchronizer));
