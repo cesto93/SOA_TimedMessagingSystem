@@ -132,7 +132,7 @@ static ssize_t dev_write(struct file *filp, const char *buff, size_t len, loff_t
 		msg_node * node = kmalloc(sizeof(msg_node), GFP_KERNEL);
 		node->msg = kmalloc(len, GFP_KERNEL); 
 		ret = copy_from_user(node->msg, buff, len);	
-		node->len = ret;
+		node->len = len - ret;
 
 		llist_add(&node->node, &my_msg_buffer->msg_list);
 	} else {
