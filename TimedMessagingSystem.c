@@ -51,7 +51,9 @@ typedef struct pending_data_node {
 
 #define MINORS 8
 session msg_buffers[MINORS];
-#define OBJECT_MAX_SIZE  (4096) //just one page
+
+//#define max_msg_size  (128) 
+//#define max_storage_size (4096)
 
 #define SET_SEND_TIMEOUT 0
 #define SET_RECV_TIMEOUT 1
@@ -112,19 +114,16 @@ static ssize_t dev_write(struct file *filp, const char *buff, size_t len, loff_t
 	mutex_lock(&(my_msg_buffer->operation_synchronizer));
 
 
-	/*if(*off >= OBJECT_MAX_SIZE) {	//offset too large
+	if(*off >= max_storage_size) {	//offset too large
 		mutex_unlock(&(my_msg_buffer->operation_synchronizer));
 		return -ENOSPC;	//no space left on device
 	} 
-	if(*off > my_msg_buffer->valid_bytes) {	//offset beyond the current stream size
-		mutex_unlock(&(my_msg_buffer->operation_synchronizer));
-		return -ENOSR;	//out of stream resources
-	} 
-	if((OBJECT_MAX_SIZE - *off) < len) 
-		len = OBJECT_MAX_SIZE - *off;*/
 
-	if (len > OBJECT_MAX_SIZE)
-		len = OBJECT_MAX_SIZE;		
+	if((max_storage_size - *off) < len) 
+		len = max_storage_size - *off;
+
+	if (len > max_msg_size)
+		len = max_msg_size;		
 
 
 	//work_queue
@@ -149,7 +148,7 @@ static ssize_t dev_write(struct file *filp, const char *buff, size_t len, loff_t
 	}
 
   
-	//*off += (len - ret);
+	*off += (len - ret);
 	mutex_unlock(&(my_msg_buffer->operation_synchronizer));
 
 	return len - ret;
@@ -178,8 +177,6 @@ static ssize_t dev_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 	my_msg_node = llist_entry(my_node, msg_node, node);
 	if (len > my_msg_node->len)
 		len = my_msg_node->len;
-
-	printk("msg_readed: %s\n", my_msg_node->msg);
 	
 	ret = copy_to_user(buff, my_msg_node->msg, len);
 
@@ -248,7 +245,8 @@ int init_module(void) {
 	}
 
 	printk(KERN_INFO "%s: new device registered, it is assigned major number %d\n", MODNAME, Major);
-	return 0;	
+
+	return sys_size_init();	
 }
 
 void cleanup_module(void) {
@@ -270,5 +268,6 @@ void cleanup_module(void) {
 
 	unregister_chrdev(Major, DEVICE_NAME);
 	printk(KERN_INFO "%s: new device unregistered, it was assigned major number %d\n", MODNAME, Major);
+	sys_size_exit();
 	return;
 }

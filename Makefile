@@ -1,5 +1,5 @@
 obj-m += TimedMessagingSystem.o
-obj-m += sys.o
+TimedMessagingSystem-objs := sys.o
 
 all:
 	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules 
