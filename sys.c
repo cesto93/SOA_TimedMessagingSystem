@@ -1,18 +1,19 @@
 #include <linux/module.h> 
 #include <linux/moduleparam.h> 
 #include <linux/printk.h> 
-#include <linux/kobject.h> 
-#include <linux/sysfs.h> 
 #include <linux/init.h> 
 #include <linux/fs.h> 
 #include <linux/string.h>
+#include <linux/kobject.h>
+#include <linux/sysfs.h> 
 
+#include "sys.h"
 
 #define NAME "TimedMessagingSystem_sizes"
 
 static struct kobject *example_kobject;
-static int max_msg_size = 128;
-static int max_storage_size = 4096;
+int max_msg_size = 128;
+int max_storage_size = 4096;
 
 module_param(max_msg_size, int, 0660);
 module_param(max_storage_size, int, 0660);

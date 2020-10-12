@@ -8,15 +8,14 @@
 #include <linux/tty.h>		/* For the tty declarations */
 #include <linux/version.h>	/* For LINUX_VERSION_CODE */
 
-
 #include <linux/workqueue.h>
 #include <linux/slab.h>
 
+#include "timed_messaging_system.h"
+#include "sys.h"
+
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Pier Francesco Contino");
-
-#define MODNAME "CHAR DEV"
-#define DEVICE_NAME "timed-msg-system" 	/* Device file name in /dev/ - not mandatory  */
 
 static int dev_open(struct inode *, struct file *);
 static int dev_release(struct inode *, struct file *);
@@ -49,15 +48,7 @@ typedef struct pending_data_node {
 	struct llist_node node;
 } pending_data_node;
 
-#define MINORS 8
 session msg_buffers[MINORS];
-
-//#define max_msg_size  (128) 
-//#define max_storage_size (4096)
-
-#define SET_SEND_TIMEOUT 0
-#define SET_RECV_TIMEOUT 1
-#define REVOKE_DELAYED_MESSAGES 2
 
 typedef struct work_data{
 	struct llist_head * pending_list;
@@ -89,7 +80,7 @@ static int dev_open(struct inode *inode, struct file *file) {
 		return -ENODEV;
 	}
 
-	printk("%s: device file successfully opened for object with minor %d\n",MODNAME,minor);
+	printk("%s: device file successfully opened for object with minor %d\n", MODNAME, minor);
 	//device opened by a default nop
 	return 0; 
 }
@@ -113,7 +104,6 @@ static ssize_t dev_write(struct file *filp, const char *buff, size_t len, loff_t
 
 	mutex_lock(&(my_msg_buffer->operation_synchronizer));
 
-
 	if(*off >= max_storage_size) {	//offset too large
 		mutex_unlock(&(my_msg_buffer->operation_synchronizer));
 		return -ENOSPC;	//no space left on device
@@ -124,7 +114,6 @@ static ssize_t dev_write(struct file *filp, const char *buff, size_t len, loff_t
 
 	if (len > max_msg_size)
 		len = max_msg_size;		
-
 
 	//work_queue
 	if (my_msg_buffer->write_timeout == 0) {
@@ -170,7 +159,6 @@ static ssize_t dev_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 		mutex_unlock(&(msg_buffer->operation_synchronizer));
 		return 0;
 	}
-
 
 	//get the msg
 	my_node = llist_del_first(&msg_buffer->msg_list);
@@ -265,9 +253,9 @@ void cleanup_module(void) {
 		}
 
 	}
-
+	sys_size_exit();
+	
 	unregister_chrdev(Major, DEVICE_NAME);
 	printk(KERN_INFO "%s: new device unregistered, it was assigned major number %d\n", MODNAME, Major);
-	sys_size_exit();
 	return;
 }
