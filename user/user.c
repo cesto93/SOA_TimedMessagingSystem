@@ -6,17 +6,24 @@
 #include <pthread.h>
 #include <sys/ioctl.h>
 
-int i;
 char buff[4096];
-#define DATA "ciao a tutti\n"
-#define SIZE strlen(DATA)
 #define MAXSIZE 4096
+#define N_MSG 50
 
-void *writing(void * path){
+const char* const data[] = { "msg1", "msg2", "msg3" };
+
+struct t_data {
+	char *device;
+	int pos;
+};
+
+void *writing(void * tdata){
 	char* device;
 	int fd;
-
-	device = (char*) path;
+	
+	struct t_data * my_data = (struct t_data *) tdata; 
+	device = my_data->device;
+	int pos = my_data->pos;
 	//sleep(1);
 
 	printf("opening device %s\n", device);
@@ -26,10 +33,13 @@ void *writing(void * path){
 		return NULL;
 	}
 	printf("device %s successfully opened\n", device);
-	//ioctl(fd,1);
-	for (i = 0; i < 10; i++) {
-		write(fd, DATA, SIZE);
-		printf("writed: %s\n", DATA);
+	
+	ioctl(fd, 0, 10);
+
+	for (int i = 0; i < N_MSG; i++) {
+		write(fd, data[pos], strlen(data[pos]));
+		printf("writed: %s\n", data[pos]);
+		usleep(50);
 	}
 	return NULL;
 }
@@ -49,9 +59,11 @@ void *reading(void * path){
 		return NULL;
 	}
 	printf("device %s successfully opened\n", device);
-	ioctl(fd,1);
-	msg = malloc(SIZE);
-	for (i = 0; i < 10; i++) { 
+	
+	//ioctl(fd, 0, 10);
+	
+	msg = malloc(MAXSIZE);
+	for (int i = 0; i < N_MSG; i++) { 
 		size = read(fd, msg, MAXSIZE);
 		printf("readed: %s\n", msg);
 		if (size == -1) {
@@ -78,12 +90,16 @@ int main(int argc, char** argv){
     major = strtol(argv[2],NULL,10);
     minors = strtol(argv[3],NULL,10);
     printf("creating %d minors for device %s with major %d\n", minors, path, major);
+    
 
-    for (i = 0; i < minors; i++) {
+    for (int i = 0; i < minors; i++) {
 		sprintf(buff, "mknod %s%d c %d %i\n", path, i, major, i);
 		system(buff);
 		sprintf(buff, "%s%d", path, i);
-		pthread_create(&tid, NULL, writing, strdup(buff));
+		struct t_data * data = malloc(sizeof(struct t_data)); 
+		data->device =  strdup(buff);
+		data->pos = i;
+		pthread_create(&tid, NULL, writing, data);
 		pthread_create(&tid, NULL, reading, strdup(buff));
     }
     pause();
