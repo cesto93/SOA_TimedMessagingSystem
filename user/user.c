@@ -6,7 +6,11 @@
 #include <pthread.h>
 #include <sys/ioctl.h>
 
+#include "../timed_messaging_system.h"
+
 char buff[4096];
+int major;
+
 #define MAXSIZE 4096
 #define N_MSG 50
 
@@ -34,7 +38,9 @@ void *writing(void * tdata){
 	}
 	printf("device %s successfully opened\n", device);
 	
-	ioctl(fd, 0, 10);
+	if (ioctl(fd, REVOKE_DELAYED_MESSAGES_NR(major)) == -1) {
+		printf("error in ioctl on device %s\n", device);
+	}
 
 	for (int i = 0; i < N_MSG; i++) {
 		write(fd, data[pos], strlen(data[pos]));
@@ -60,8 +66,6 @@ void *reading(void * path){
 	}
 	printf("device %s successfully opened\n", device);
 	
-	//ioctl(fd, 0, 10);
-	
 	msg = malloc(MAXSIZE);
 	for (int i = 0; i < N_MSG; i++) { 
 		size = read(fd, msg, MAXSIZE);
@@ -76,7 +80,6 @@ void *reading(void * path){
 
 int main(int argc, char** argv){
 	int ret;
-    int major;
     int minors;
     char *path;
     pthread_t tid;
