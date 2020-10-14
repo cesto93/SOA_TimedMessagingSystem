@@ -164,8 +164,12 @@ static ssize_t dev_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 
 	if (llist_empty(&my_session->msg_list)) {
 		printk("%s: msg_list empty\n", MODNAME);
-		mutex_unlock(&(my_session->operation_synchronizer));
-		return 0;
+		
+		if (my_session->read_timeout == 0) {
+			mutex_unlock(&(my_session->operation_synchronizer));
+			return 0;
+		}
+		//TODO implement waiting read
 	}
 	
 	//get the msg
@@ -212,6 +216,7 @@ static int dev_flush(struct file *filp, fl_owner_t id) {
 	printk("somedoby called the flush\n");
 	
 	remove_msgs(sess->pending_list);
+	//TODO awake waiting threads
 	return 0;
 }
 
