@@ -10,6 +10,7 @@
 
 char buff[4096];
 int major;
+int w_timeout = 0;
 
 #define MAXSIZE 4096
 #define N_MSG 50
@@ -38,7 +39,7 @@ void *writing(void * tdata){
 	}
 	printf("device %s successfully opened\n", device);
 	
-	if (ioctl(fd, SET_SEND_TIMEOUT_NR(major), 20) == -1) {
+	if (ioctl(fd, SET_SEND_TIMEOUT_NR(major), w_timeout) == -1) {
 		printf("error in ioctl on device %s\n", device);
 	}
 
@@ -85,13 +86,14 @@ int main(int argc, char** argv){
     pthread_t tid;
 
 	if (argc < 4) {
-		printf("useg: prog pathname major minors");
+		printf("useg: prog pathname major minors [write_timeout]");
 		return -1;
     }
 
 	path = argv[1];
     major = strtol(argv[2],NULL,10);
     minors = strtol(argv[3],NULL,10);
+    w_timeout = strtol(argv[4],NULL,10);
     printf("creating %d minors for device %s with major %d\n", minors, path, major);
     
 
