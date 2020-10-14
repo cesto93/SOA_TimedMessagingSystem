@@ -40,9 +40,7 @@ typedef struct msg_node {
 	struct llist_node node;
 } msg_node;
 
-typedef msg_node pending_data_node; // PENDING WRITE DATA
-
-session msg_buffers[MINORS];
+session sessions[MINORS];
 
 typedef struct work_data{
 	struct llist_head * pending_list;
@@ -57,33 +55,29 @@ void deffered_write(struct delayed_work *work) {
 	session * sess = wdata->msg_storage;
 	struct llist_head * pending_list = wdata->pending_list;
 	struct llist_node * req_node;
-	pending_data_node * pending_data;
-	msg_node * new;
+	msg_node * pending;
+	
+	printk("%s: called deffered write\n", MODNAME);
 	
 	mutex_lock(&(sess->operation_synchronizer));
 	
 	req_node = llist_del_first(pending_list); //first node in req
-	pending_data = llist_entry(req_node, pending_data_node, node);
-
-	new = kmalloc(sizeof(msg_node), GFP_KERNEL);
-	new->msg = pending_data->msg;
-	new->len = pending_data->len; 
-
-	llist_add(&new->node, &sess->msg_list);
+	pending = llist_entry(req_node, msg_node, node);
+	
+	llist_add(&pending->node, &sess->msg_list);
 	
 	mutex_unlock(&(sess->operation_synchronizer));
 
-	kfree(pending_data);
-	kfree(wdata);
+	kfree(wdata); 
 }
 
-static void remove_pending_msg(session *sess) {
-	pending_data_node * pending_data;
-	llist_for_each_entry(pending_data, sess->pending_list.first, node) {
+static void remove_msgs(struct llist_head list) {
+	msg_node * pending_data;
+	llist_for_each_entry(pending_data, list.first, node) {
 		kfree(pending_data->msg);
 		kfree(pending_data);
 	}
-	llist_del_all(&sess->pending_list);
+	llist_del_all(&list);
 }
 
 static int dev_open(struct inode *inode, struct file *file) {
@@ -108,16 +102,16 @@ static int dev_release(struct inode *inode, struct file *file) {
 static ssize_t dev_write(struct file *filp, const char *buff, size_t len, loff_t *off) {
 	int minor = get_minor(filp);
 	int ret;
-	session * my_msg_buffer = msg_buffers + minor;
-	pending_data_node * pending_node;
+	session * my_session = sessions + minor;
+	msg_node * pending_node;
 	work_data * wdata;
 
-	printk("%s: somebody called a write on dev with [major,minor] number [%d,%d]\n",MODNAME,get_major(filp),get_minor(filp));
+	printk("%s: somebody called a write on dev with [major,minor] number [%d,%d]\n", MODNAME, get_major(filp), get_minor(filp));
 
-	mutex_lock(&(my_msg_buffer->operation_synchronizer));
+	mutex_lock(&(my_session->operation_synchronizer));
 
 	if(*off >= max_storage_size) {	//offset too large
-		mutex_unlock(&(my_msg_buffer->operation_synchronizer));
+		mutex_unlock(&(my_session->operation_synchronizer));
 		return -ENOSPC;	//no space left on device
 	} 
 
@@ -128,30 +122,31 @@ static ssize_t dev_write(struct file *filp, const char *buff, size_t len, loff_t
 		len = max_msg_size;		
 
 	//work_queue
-	if (my_msg_buffer->write_timeout == 0) {
+	if (my_session->write_timeout == 0) {
 		msg_node * node = kmalloc(sizeof(msg_node), GFP_KERNEL);
 		node->msg = kmalloc(len, GFP_KERNEL); 
 		ret = copy_from_user(node->msg, buff, len);	
 		node->len = len - ret;
 
-		llist_add(&node->node, &my_msg_buffer->msg_list);
+		llist_add(&node->node, &my_session->msg_list);
 		
 	} else {
-		pending_node = kmalloc(sizeof(pending_data_node), GFP_KERNEL);
+		pending_node = kmalloc(sizeof(msg_node), GFP_KERNEL);
 		pending_node->msg = kmalloc(len, GFP_KERNEL);
 		ret = copy_from_user(pending_node->msg, buff, len);
-		pending_node->len = ret;
-		llist_add(&pending_node->node, &my_msg_buffer->pending_list);
+		pending_node->len = len - ret;
+		
+		llist_add(&pending_node->node, &my_session->pending_list);
 
-		wdata = kmalloc(sizeof(pending_data_node), GFP_KERNEL);
-		wdata->pending_list = &my_msg_buffer->pending_list;
+		wdata = kmalloc(sizeof(work_data), GFP_KERNEL);
+		wdata->pending_list = &my_session->pending_list;
+		wdata->msg_storage = my_session;
 		INIT_DELAYED_WORK(&wdata->my_work, (void *) deffered_write);
-		queue_delayed_work(queue, &wdata->my_work, my_msg_buffer->write_timeout);
+		queue_delayed_work(queue, &wdata->my_work, my_session->write_timeout);
 	}
-
   
 	*off += (len - ret);
-	mutex_unlock(&(my_msg_buffer->operation_synchronizer));
+	mutex_unlock(&(my_session->operation_synchronizer));
 
 	return len - ret;
 }
@@ -159,21 +154,22 @@ static ssize_t dev_write(struct file *filp, const char *buff, size_t len, loff_t
 static ssize_t dev_read(struct file *filp, char *buff, size_t len, loff_t *off) {
 	int minor = get_minor(filp);
 	int ret;
-	session * msg_buffer = msg_buffers + minor;
+	session * my_session = sessions + minor;
 	struct llist_node * my_node;
 	msg_node * my_msg_node;
 
-	printk("%s: somebody called a read on dev with [major,minor] number [%d,%d]\n", MODNAME, get_major(filp), get_minor(filp));
+	printk("%s: somebody called a read on dev with [major,minor] number [%d,%d] ", MODNAME, get_major(filp), get_minor(filp));
 
-	mutex_lock(&(msg_buffer->operation_synchronizer));
+	mutex_lock(&(my_session->operation_synchronizer));
 
-	if (llist_empty(&msg_buffer->msg_list)) {
-		mutex_unlock(&(msg_buffer->operation_synchronizer));
+	if (llist_empty(&my_session->msg_list)) {
+		printk("%s: msg_list empty\n", MODNAME);
+		mutex_unlock(&(my_session->operation_synchronizer));
 		return 0;
 	}
-
+	
 	//get the msg
-	my_node = llist_del_first(&msg_buffer->msg_list);
+	my_node = llist_del_first(&my_session->msg_list);
 	my_msg_node = llist_entry(my_node, msg_node, node);
 	if (len > my_msg_node->len)
 		len = my_msg_node->len;
@@ -184,7 +180,7 @@ static ssize_t dev_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 	kfree(my_msg_node);
   
 	//*off += (len - ret);
-	mutex_unlock(&(msg_buffer->operation_synchronizer));
+	mutex_unlock(&(my_session->operation_synchronizer));
 
 	return len - ret;
 }
@@ -192,30 +188,30 @@ static ssize_t dev_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 static long dev_ioctl(struct file *filp, unsigned int command, unsigned long param) {
 	int minor = get_minor(filp);
 	int nr = _IOC_NR(command);
-	session *msg_buffer = msg_buffers + minor;
+	session *my_session = sessions + minor;
 	
-	mutex_lock(&(msg_buffer->operation_synchronizer));
+	mutex_lock(&(my_session->operation_synchronizer));
 	
 	switch(nr) {
-		case SET_SEND_TIMEOUT: msg_buffer->write_timeout = param; break;
-		case SET_RECV_TIMEOUT: msg_buffer->read_timeout = param; break;
-		case REVOKE_DELAYED_MESSAGES: remove_pending_msg(msg_buffers); break;
+		case SET_SEND_TIMEOUT: my_session->write_timeout = param; break;
+		case SET_RECV_TIMEOUT: my_session->read_timeout = param; break;
+		case REVOKE_DELAYED_MESSAGES: remove_msgs(my_session->pending_list); break;
 		default: return -1;
 	}
-	mutex_unlock(&(msg_buffer->operation_synchronizer));
+	mutex_unlock(&(my_session->operation_synchronizer));
 	
-	printk("%s: ioctl on dev with [major,minor] number [%d,%d] and nr %u \n", 
-			MODNAME, get_major(filp), minor, nr);
+	printk("%s: ioctl on dev with [major,minor] number [%d,%d] and nr %u and param %lu \n", 
+			MODNAME, get_major(filp), minor, nr, param);
 
 	return 0;
 }
 
 static int dev_flush(struct file *filp, fl_owner_t id) {
 	int minor = get_minor(filp);
-	session *sess = msg_buffers + minor;
+	session *sess = sessions + minor;
 	printk("somedoby called the flush\n");
 	
-	remove_pending_msg(sess);
+	remove_msgs(sess->pending_list);
 	return 0;
 }
 
@@ -234,13 +230,12 @@ int init_module(void) {
 
 	//initialize the drive internal state
 	for(i = 0; i < MINORS; i++) {
-		mutex_init(&(msg_buffers[i].operation_synchronizer));
+		mutex_init(&(sessions[i].operation_synchronizer));
 
-		msg_buffers[i].read_timeout = 0;
-		msg_buffers[i].write_timeout = 0;
-		init_llist_head(&msg_buffers[i].msg_list);
-		init_llist_head(&msg_buffers[i].pending_list);
-
+		sessions[i].read_timeout = 0;
+		sessions[i].write_timeout = 0;
+		init_llist_head(&sessions[i].msg_list);
+		init_llist_head(&sessions[i].pending_list);
 
 	}
 	queue = alloc_workqueue("timed-msg-system", WQ_UNBOUND, 32);
@@ -259,15 +254,9 @@ int init_module(void) {
 
 void cleanup_module(void) {
 	int i;
-	msg_node * msg_node;
-
 	for(i = 0; i < MINORS; i++) {
-		remove_pending_msg(&msg_buffers[i]);
-		llist_for_each_entry(msg_node, msg_buffers[i].msg_list.first, node) {
-			kfree(msg_node->msg);
-			kfree(msg_node);
-		}
-
+		remove_msgs(sessions[i].pending_list);
+		remove_msgs(sessions[i].msg_list);
 	}
 	sys_size_exit();
 	

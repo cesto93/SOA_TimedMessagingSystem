@@ -9,8 +9,8 @@ extern int max_storage_size;
 #define MODNAME "CHAR DEV"
 #define DEVICE_NAME "timed-msg-system" 	/* Device file name in /dev/ - not mandatory  */
 
-#define SET_SEND_TIMEOUT_NR(MAJOR_NUM) _IOR(MAJOR_NUM, 0, long)
-#define SET_RECV_TIMEOUT_NR(MAJOR_NUM) _IOR(MAJOR_NUM, 1, long)
+#define SET_SEND_TIMEOUT_NR(MAJOR_NUM) _IOR(MAJOR_NUM, 0, int)
+#define SET_RECV_TIMEOUT_NR(MAJOR_NUM) _IOR(MAJOR_NUM, 1, int)
 #define REVOKE_DELAYED_MESSAGES_NR(MAJOR_NUM) _IO(MAJOR_NUM, 2)
 
 #define SET_SEND_TIMEOUT 0

@@ -38,7 +38,7 @@ void *writing(void * tdata){
 	}
 	printf("device %s successfully opened\n", device);
 	
-	if (ioctl(fd, REVOKE_DELAYED_MESSAGES_NR(major)) == -1) {
+	if (ioctl(fd, SET_SEND_TIMEOUT_NR(major), 20) == -1) {
 		printf("error in ioctl on device %s\n", device);
 	}
 
