@@ -30,6 +30,7 @@ typedef struct _session{
 	struct mutex operation_synchronizer;
 	struct llist_head msg_list;
 	struct llist_head pending_list;
+	wait_queue_head_t wait_queue;
 	long read_timeout;
 	long write_timeout;
 } session;
@@ -144,10 +145,10 @@ static ssize_t dev_write(struct file *filp, const char *buff, size_t len, loff_t
 		INIT_DELAYED_WORK(&wdata->my_work, (void *) deffered_write);
 		queue_delayed_work(queue, &wdata->my_work, my_session->write_timeout);
 	}
+	
+	mutex_unlock(&(my_session->operation_synchronizer));
   
 	*off += (len - ret);
-	mutex_unlock(&(my_session->operation_synchronizer));
-
 	return len - ret;
 }
 
@@ -163,13 +164,17 @@ static ssize_t dev_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 	mutex_lock(&(my_session->operation_synchronizer));
 
 	if (llist_empty(&my_session->msg_list)) {
+		mutex_unlock(&(my_session->operation_synchronizer));
 		printk("%s: msg_list empty\n", MODNAME);
 		
 		if (my_session->read_timeout == 0) {
-			mutex_unlock(&(my_session->operation_synchronizer));
 			return 0;
 		}
-		//TODO implement waiting read
+
+		if (wait_event_timeout(my_session->wait_queue, !llist_empty(&my_session->msg_list), my_session->read_timeout) == 0) {
+			return 0;
+		}
+		mutex_lock(&(my_session->operation_synchronizer));
 	}
 	
 	//get the msg
@@ -179,12 +184,13 @@ static ssize_t dev_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 		len = my_msg_node->len;
 	
 	ret = copy_to_user(buff, my_msg_node->msg, len);
+	
+	mutex_unlock(&(my_session->operation_synchronizer));
 
 	kfree(my_msg_node->msg);
 	kfree(my_msg_node);
   
 	//*off += (len - ret);
-	mutex_unlock(&(my_session->operation_synchronizer));
 
 	return len - ret;
 }
@@ -216,6 +222,7 @@ static int dev_flush(struct file *filp, fl_owner_t id) {
 	printk("somedoby called the flush\n");
 	
 	remove_msgs(sess->pending_list);
+	wake_up(&sess->wait_queue);
 	//TODO awake waiting threads
 	return 0;
 }
@@ -241,6 +248,7 @@ int init_module(void) {
 		sessions[i].write_timeout = 0;
 		init_llist_head(&sessions[i].msg_list);
 		init_llist_head(&sessions[i].pending_list);
+		init_waitqueue_head(&sessions[i].wait_queue);
 
 	}
 	queue = alloc_workqueue("timed-msg-system", WQ_UNBOUND, 32);
