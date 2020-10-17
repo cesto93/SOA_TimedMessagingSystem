@@ -28,8 +28,8 @@ static int Major;	/* Major number assigned to broadcast device driver */
 
 typedef struct _session{
 	struct mutex operation_synchronizer;
-	struct llist_head msg_list;
-	struct llist_head pending_list;
+	struct list_head msg_list;
+	struct list_head pending_list;
 	wait_queue_head_t wait_queue;
 	long read_timeout;
 	long write_timeout;
@@ -38,47 +38,62 @@ typedef struct _session{
 typedef struct msg_node {
 	char * msg;
 	int len;
-	struct llist_node node;
+	struct list_head node;
 } msg_node;
 
 session sessions[MINORS];
 
 typedef struct work_data{
-	struct llist_head * pending_list;
+	struct list_head node;
 	struct delayed_work my_work;
-	session * msg_storage;
+	session * my_session;
+	msg_node * my_msg_node;
 } work_data;
 
 struct workqueue_struct * queue;
 
 void deffered_write(struct delayed_work *work) {
 	work_data * wdata = container_of(work, work_data, my_work);
-	session * sess = wdata->msg_storage;
-	struct llist_head * pending_list = wdata->pending_list;
-	struct llist_node * req_node;
-	msg_node * pending;
+	session * sess = wdata->my_session;
+	//struct list_head * pending_list = wdata->pending_list;
+	msg_node * pending_msg = wdata->my_msg_node;
 	
-	printk("%s: called deffered write\n", MODNAME);
 	
 	mutex_lock(&(sess->operation_synchronizer));
 	
-	req_node = llist_del_first(pending_list); //first node in req
-	pending = llist_entry(req_node, msg_node, node);
+	list_move_tail(&pending_msg->node, &sess->msg_list);
+	list_del(&wdata->node);
 	
-	llist_add(&pending->node, &sess->msg_list);
+	/*pending = list_entry(pending_list, msg_node, node); //get msg
+	list_del_init(pending_list); 
+	
+	list_add_tail(&pending->node, &sess->msg_list);*/
 	
 	mutex_unlock(&(sess->operation_synchronizer));
+	
+	printk("%s: called deffered write msg : %s \n", MODNAME, pending_msg->msg);
 
 	kfree(wdata); 
 }
 
-static void remove_msgs(struct llist_head list) {
+static void remove_msgs(struct list_head *list) {
 	msg_node * pending_data;
-	llist_for_each_entry(pending_data, list.first, node) {
+	list_for_each_entry(pending_data, list, node){
+		list_del(&pending_data->node);
 		kfree(pending_data->msg);
 		kfree(pending_data);
 	}
-	llist_del_all(&list);
+}
+
+static void remove_works(struct list_head *list) {
+	work_data * w_data;
+	list_for_each_entry(w_data, list, node){
+		list_del(&w_data->node);
+		cancel_delayed_work(&w_data->my_work);
+		kfree(w_data->my_msg_node->msg);
+		kfree(w_data->my_msg_node);
+		kfree(w_data);
+	}
 }
 
 static int dev_open(struct inode *inode, struct file *file) {
@@ -104,15 +119,13 @@ static ssize_t dev_write(struct file *filp, const char *buff, size_t len, loff_t
 	int minor = get_minor(filp);
 	int ret;
 	session * my_session = sessions + minor;
-	msg_node * pending_node;
+	msg_node * node;
 	work_data * wdata;
 
 	printk("%s: somebody called a write on dev with [major,minor] number [%d,%d]\n", MODNAME, get_major(filp), get_minor(filp));
 
-	mutex_lock(&(my_session->operation_synchronizer));
 
 	if(*off >= max_storage_size) {	//offset too large
-		mutex_unlock(&(my_session->operation_synchronizer));
 		return -ENOSPC;	//no space left on device
 	} 
 
@@ -122,28 +135,29 @@ static ssize_t dev_write(struct file *filp, const char *buff, size_t len, loff_t
 	if (len > max_msg_size)
 		len = max_msg_size;		
 
-	//work_queue
-	if (my_session->write_timeout == 0) {
-		msg_node * node = kmalloc(sizeof(msg_node), GFP_KERNEL);
-		node->msg = kmalloc(len, GFP_KERNEL); 
-		ret = copy_from_user(node->msg, buff, len);	
-		node->len = len - ret;
-
-		llist_add(&node->node, &my_session->msg_list);
+	node = kmalloc(sizeof(msg_node), GFP_KERNEL);
+	INIT_LIST_HEAD(&node->node);
+	node->msg = kmalloc(len, GFP_KERNEL); 
+	
+	ret = copy_from_user(node->msg, buff, len);
+	node->len = len - ret;
+	
+	mutex_lock(&(my_session->operation_synchronizer));
+	
+	if (my_session->write_timeout == 0) { //istant write
+		list_add_tail(&node->node, &my_session->msg_list);
 		
-	} else {
-		pending_node = kmalloc(sizeof(msg_node), GFP_KERNEL);
-		pending_node->msg = kmalloc(len, GFP_KERNEL);
-		ret = copy_from_user(pending_node->msg, buff, len);
-		pending_node->len = len - ret;
+	} else { //deferred write
 		
-		llist_add(&pending_node->node, &my_session->pending_list);
-
 		wdata = kmalloc(sizeof(work_data), GFP_KERNEL);
-		wdata->pending_list = &my_session->pending_list;
-		wdata->msg_storage = my_session;
+		wdata->my_msg_node = node;
+		wdata->my_session = my_session;
+		
 		INIT_DELAYED_WORK(&wdata->my_work, (void *) deffered_write);
 		queue_delayed_work(queue, &wdata->my_work, my_session->write_timeout);
+		
+		//queuing req need lock
+		list_add(&wdata->node, &my_session->pending_list);
 	}
 	
 	mutex_unlock(&(my_session->operation_synchronizer));
@@ -156,14 +170,13 @@ static ssize_t dev_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 	int minor = get_minor(filp);
 	int ret;
 	session * my_session = sessions + minor;
-	struct llist_node * my_node;
 	msg_node * my_msg_node;
 
 	printk("%s: somebody called a read on dev with [major,minor] number [%d,%d] ", MODNAME, get_major(filp), get_minor(filp));
 
 	mutex_lock(&(my_session->operation_synchronizer));
 
-	if (llist_empty(&my_session->msg_list)) {
+	if (list_empty(&my_session->msg_list)) {
 		mutex_unlock(&(my_session->operation_synchronizer));
 		printk("%s: msg_list empty\n", MODNAME);
 		
@@ -171,15 +184,16 @@ static ssize_t dev_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 			return 0;
 		}
 
-		if (wait_event_timeout(my_session->wait_queue, !llist_empty(&my_session->msg_list), my_session->read_timeout) == 0) {
+		if (wait_event_timeout(my_session->wait_queue, !list_empty(&my_session->msg_list), my_session->read_timeout) == 0) {
 			return 0;
 		}
 		mutex_lock(&(my_session->operation_synchronizer));
 	}
 	
 	//get the msg
-	my_node = llist_del_first(&my_session->msg_list);
-	my_msg_node = llist_entry(my_node, msg_node, node);
+	my_msg_node = list_entry(my_session->msg_list.next, msg_node, node);
+	list_del(my_session->msg_list.next);
+	
 	if (len > my_msg_node->len)
 		len = my_msg_node->len;
 	
@@ -205,7 +219,7 @@ static long dev_ioctl(struct file *filp, unsigned int command, unsigned long par
 	switch(nr) {
 		case SET_SEND_TIMEOUT: my_session->write_timeout = param; break;
 		case SET_RECV_TIMEOUT: my_session->read_timeout = param; break;
-		case REVOKE_DELAYED_MESSAGES: remove_msgs(my_session->pending_list); break;
+		case REVOKE_DELAYED_MESSAGES: remove_msgs(&my_session->pending_list); break;
 		default: return -1;
 	}
 	mutex_unlock(&(my_session->operation_synchronizer));
@@ -221,9 +235,8 @@ static int dev_flush(struct file *filp, fl_owner_t id) {
 	session *sess = sessions + minor;
 	printk("somedoby called the flush\n");
 	
-	remove_msgs(sess->pending_list);
-	wake_up(&sess->wait_queue);
-	//TODO awake waiting threads
+	remove_works(&sess->pending_list); //cancel pending write
+	wake_up(&sess->wait_queue); //wake up reader
 	return 0;
 }
 
@@ -246,10 +259,9 @@ int init_module(void) {
 
 		sessions[i].read_timeout = 0;
 		sessions[i].write_timeout = 0;
-		init_llist_head(&sessions[i].msg_list);
-		init_llist_head(&sessions[i].pending_list);
+		INIT_LIST_HEAD(&sessions[i].msg_list);
+		INIT_LIST_HEAD(&sessions[i].pending_list);
 		init_waitqueue_head(&sessions[i].wait_queue);
-
 	}
 	queue = alloc_workqueue("timed-msg-system", WQ_UNBOUND, 32);
 
@@ -268,8 +280,8 @@ int init_module(void) {
 void cleanup_module(void) {
 	int i;
 	for(i = 0; i < MINORS; i++) {
-		remove_msgs(sessions[i].pending_list);
-		remove_msgs(sessions[i].msg_list);
+		remove_works(&sessions[i].pending_list);
+		remove_msgs(&sessions[i].msg_list);
 	}
 	sys_size_exit();
 	
