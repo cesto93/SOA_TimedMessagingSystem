@@ -44,7 +44,7 @@ typedef struct msg_node {
 session sessions[MINORS];
 
 typedef struct work_data{
-	struct list_head node;
+	struct list_head node; //This list does not need to be sequential we cant try llist.h
 	struct delayed_work my_work;
 	session * my_session;
 	msg_node * my_msg_node;
