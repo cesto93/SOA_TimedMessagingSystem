@@ -62,7 +62,7 @@ void deffered_write(struct delayed_work *work) {
 	mutex_lock(&(sess->msg_list_mtx));
 	
 	list_move_tail(&pending_msg->node, &sess->msg_list);
-	list_del(&wdata->node);
+	list_del_init(&wdata->node);
 	
 	mutex_unlock(&(sess->msg_list_mtx));
 	mutex_unlock(&(sess->pending_list_mtx));
@@ -82,8 +82,8 @@ static void remove_msgs(struct list_head *list) {
 }
 
 static void remove_works(struct list_head *list) {
-	work_data * w_data;
-	list_for_each_entry(w_data, list, node){
+	work_data * w_data, * temp;
+	list_for_each_entry_safe(w_data, temp, list, node){
 		list_del(&w_data->node);
 		cancel_delayed_work(&w_data->my_work);
 		kfree(w_data->my_msg_node->msg);
@@ -118,7 +118,7 @@ static ssize_t dev_write(struct file *filp, const char *buff, size_t len, loff_t
 	msg_node * node;
 	work_data * wdata;
 
-	printk("%s: somebody called a write on dev with [major,minor] number [%d,%d]\n", MODNAME, get_major(filp), get_minor(filp));
+	printk("%s: write on dev with [major,minor] number [%d,%d]\n", MODNAME, get_major(filp), get_minor(filp));
 
 	if(*off >= max_storage_size) {	//offset too large
 		return -ENOSPC;	//no space left on device
@@ -168,7 +168,7 @@ static ssize_t dev_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 	session * my_session = sessions + minor;
 	msg_node * my_msg_node;
 
-	printk("%s: somebody called a read on dev with [major,minor] number [%d,%d] ", MODNAME, get_major(filp), get_minor(filp));
+	printk("%s: read on dev with [major,minor] number [%d,%d] ", MODNAME, get_major(filp), get_minor(filp));
 
 	mutex_lock(&(my_session->msg_list_mtx));
 
@@ -229,10 +229,11 @@ static long dev_ioctl(struct file *filp, unsigned int command, unsigned long par
 static int dev_flush(struct file *filp, fl_owner_t id) {
 	int minor = get_minor(filp);
 	session *sess = sessions + minor;
-	printk("somedoby called the flush\n");
+	printk("%s: device flush: minor %d\n", MODNAME, minor);
 	
 	mutex_lock(&(sess->pending_list_mtx));
-	remove_works(&sess->pending_list); //cancel pending write
+	if (!list_empty(&sess->pending_list))
+		remove_works(&sess->pending_list); //cancel pending write
 	mutex_unlock(&(sess->pending_list_mtx));
 	
 	wake_up(&sess->wait_queue); //wake up reader
