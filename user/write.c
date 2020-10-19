@@ -11,11 +11,9 @@
 char buff[4096];
 int major;
 int w_timeout = 0;
-int r_timeout = 0;
 
 #define MAXSIZE 4096
 #define W_MSG 10
-#define R_MSG 20
 
 struct t_data {
 	char *device;
@@ -53,51 +51,13 @@ void *writing(void * tdata){
 	return NULL;
 }
 
-void *reading(void * path){
-	char * device;
-	char * msg;
-	int fd, size;
-
-	device = (char*) path;
-	usleep(100000);
-
-	printf("opening device %s\n", device);
-	fd = open(device, O_RDWR);
-	if (fd == -1) {
-		printf("open error on device %s\n", device);
-		return NULL;
-	}
-	printf("device %s successfully opened\n", device);
-	
-	if (ioctl(fd, SET_RECV_TIMEOUT_NR(major), r_timeout) == -1) {
-		printf("error in ioctl on device %s\n", device);
-	}
-	
-	msg = malloc(MAXSIZE);
-	for (int i = 0; i < R_MSG; i++) { 
-		size = read(fd, msg, MAXSIZE);
-		 if (size != 0) {
-			printf("readed: %s\n", msg);
-		 } else {
-			puts("Nothing to read");
-		}
-		if (size == -1) {
-			perror("error on read");
-			return NULL;
-		}		
-	}
-	
-	return NULL;
-}
-
 int main(int argc, char** argv){
 	int ret;
     int minors;
-    char *path;
-    
+    char *path;    
 
 	if (argc < 4) {
-		printf("useg: prog pathname major minors [write_timeout] [read_timeout]\n");
+		printf("useg: prog pathname major minors [write_timeout]\n");
 		return -1;
     }
 
@@ -108,26 +68,20 @@ int main(int argc, char** argv){
     if (argc >= 5) {
 		w_timeout = strtol(argv[4], NULL, 10);
 	}
-	if (argc >= 6) {
-		r_timeout = strtol(argv[5], NULL, 10);
-	}
 	
 	pthread_t * tids = malloc(sizeof(pthread_t) * minors);
     printf("creating %d minors for device %s with major %d\n", minors, path, major);
-    
-
+	
     for (int i = 0; i < minors; i++) {
-		sprintf(buff, "mknod %s%d c %d %i\n", path, i, major, i);
-		system(buff);
 		sprintf(buff, "%s%d", path, i);
 		struct t_data * data = malloc(sizeof(struct t_data)); 
 		data->device =  strdup(buff);
 		data->pos = i;
 		pthread_create(&tids[i], NULL, writing, data);
-		pthread_create(&tids[i], NULL, reading, strdup(buff));
     }
     for (int i = 0; i < minors; i++) {
 		pthread_join(tids[i], NULL);
 	}
+	pause();
     return 0;
 }
