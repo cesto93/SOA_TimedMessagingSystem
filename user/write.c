@@ -44,8 +44,12 @@ void *writing(void * tdata){
 
 	for (int i = 0; i < W_MSG; i++) {
 		int len = sprintf(msg, "msg%d_%d", pos, i);
-		write(fd, msg, len);
-		printf("writed: %s\n", msg);
+		int ret = write(fd, msg, len);
+		if (ret == -1) {
+			puts("error in write");
+		} else {
+			printf("writed: %s\n", msg);
+		}
 		usleep(5000);
 	}
 	return NULL;
