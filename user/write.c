@@ -14,6 +14,9 @@ int w_timeout = 0;
 
 #define MAXSIZE 4096
 #define W_MSG 10
+#define THREAD_PER_NODE 3
+
+//#define RVK_MSG
 
 struct t_data {
 	char *device;
@@ -52,6 +55,13 @@ void *writing(void * tdata){
 		}
 		usleep(5000);
 	}
+	
+	#ifdef RVK_MSG
+	if (ioctl(fd, REVOKE_DELAYED_MESSAGES_NR(major), w_timeout) == -1) {
+		printf("error in ioctl on device %s\n", device);
+	}
+	#endif
+	
 	return NULL;
 }
 
@@ -73,7 +83,7 @@ int main(int argc, char** argv){
 		w_timeout = strtol(argv[4], NULL, 10);
 	}
 	
-	pthread_t * tids = malloc(sizeof(pthread_t) * minors);
+	pthread_t * tids = malloc(sizeof(pthread_t) * minors * THREAD_PER_NODE);
     printf("creating %d minors for device %s with major %d\n", minors, path, major);
 	
     for (int i = 0; i < minors; i++) {
@@ -81,9 +91,11 @@ int main(int argc, char** argv){
 		struct t_data * data = malloc(sizeof(struct t_data)); 
 		data->device =  strdup(buff);
 		data->pos = i;
-		pthread_create(&tids[i], NULL, writing, data);
+		for (int j = 0; j < THREAD_PER_NODE; j++) {
+			pthread_create(&tids[i + j], NULL, writing, data);
+		}
     }
-    for (int i = 0; i < minors; i++) {
+    for (int i = 0; i < minors * THREAD_PER_NODE; i++) {
 		pthread_join(tids[i], NULL);
 	}
 	pause();

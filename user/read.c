@@ -14,6 +14,7 @@ int r_timeout = 0;
 
 #define MAXSIZE 4096
 #define R_MSG 20
+#define THREAD_PER_NODE 3
 
 void *reading(void * path){
 	char * device;
@@ -39,7 +40,7 @@ void *reading(void * path){
 	for (int i = 0; i < R_MSG; i++) { 
 		size = read(fd, msg, MAXSIZE);
 		 if (size != 0) {
-			printf("readed: %s\n", msg);
+			printf("readed on dev %s: %s\n", device, msg);
 		 } else {
 			puts("Nothing to read");
 		}
@@ -69,13 +70,15 @@ int main(int argc, char** argv){
 		r_timeout = strtol(argv[4], NULL, 10);
 	}
 	
-	pthread_t * tids = malloc(sizeof(pthread_t) * minors);
+	pthread_t * tids = malloc(sizeof(pthread_t) * minors * THREAD_PER_NODE);
 	
     for (int i = 0; i < minors; i++) {
 		sprintf(buff, "%s%d", path, i);
-		pthread_create(&tids[i], NULL, reading, strdup(buff));
+		for (int j = 0; j < THREAD_PER_NODE; j++) {
+			pthread_create(&tids[i+j], NULL, reading, strdup(buff));
+		}
     }
-    for (int i = 0; i < minors; i++) {
+    for (int i = 0; i < minors * THREAD_PER_NODE; i++) {
 		pthread_join(tids[i], NULL);
 	}
     return 0;

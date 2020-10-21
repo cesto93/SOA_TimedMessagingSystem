@@ -21,10 +21,8 @@ static int dev_open(struct inode *, struct file *);
 static int dev_release(struct inode *, struct file *);
 static ssize_t dev_write(struct file *, const char *, size_t, loff_t *);
 
-static int Major;	/* Major number assigned to broadcast device driver */
-
-#define get_major(session)	MAJOR(session->f_inode->i_rdev)
-#define get_minor(session)	MINOR(session->f_inode->i_rdev)
+#define get_major(file)	MAJOR(file->f_inode->i_rdev)
+#define get_minor(file)	MINOR(file->f_inode->i_rdev)
 
 typedef struct _instance{ //dev instance data
 	struct mutex msg_list_mtx;
@@ -56,6 +54,7 @@ typedef struct work_data{
 	msg_node * my_msg_node;
 } work_data;
 
+static int Major;	/* Major number assigned to broadcast device driver */
 struct workqueue_struct * queue;
 instance instances[MINORS];
 
