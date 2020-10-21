@@ -29,6 +29,7 @@ static int Major;	/* Major number assigned to broadcast device driver */
 typedef struct _instance{ //dev instance data
 	struct mutex msg_list_mtx;
 	struct list_head msg_list;
+	struct list_head session_list;
 	wait_queue_head_t wait_queue;
 	long storage_size;
 } instance;
@@ -36,6 +37,7 @@ typedef struct _instance{ //dev instance data
 typedef struct _session{  //session data
 	struct mutex pending_list_mtx;
 	struct list_head pending_list;
+	struct list_head session_node;
 	long read_timeout;
 	long write_timeout;
 } session;
@@ -67,7 +69,7 @@ void deffered_write(struct delayed_work *work) {
 	mutex_lock(&(inst->msg_list_mtx));
 	
 	if(pending_msg->len + inst->storage_size > max_storage_size) { //no space left on device
-			list_del_init(&pending_msg->node);
+			list_del(&pending_msg->node);
 			mutex_unlock(&(inst->msg_list_mtx));
 			mutex_unlock(&(sess->pending_list_mtx));
 			return;	
@@ -76,12 +78,12 @@ void deffered_write(struct delayed_work *work) {
 	inst->storage_size += pending_msg->len;
 	
 	list_move_tail(&pending_msg->node, &inst->msg_list);
-	list_del_init(&wdata->node);
+	list_del(&wdata->node);
 	
 	mutex_unlock(&(inst->msg_list_mtx));
 	mutex_unlock(&(sess->pending_list_mtx));
 	
-	printk("%s: called deffered write msg : %s \n", MODNAME, pending_msg->msg);
+	printk(KERN_INFO "%s: called deffered write msg : %s \n", MODNAME, pending_msg->msg);
 
 	kfree(wdata); 
 }
@@ -109,6 +111,7 @@ static void remove_works(struct list_head *list) {
 static int dev_open(struct inode *inode, struct file *file) {
 	session * sess;
 	int minor = get_minor(file);
+	instance * inst = instances + minor;
 
 	if(minor >= MINORS){
 		return -ENODEV;
@@ -118,7 +121,12 @@ static int dev_open(struct inode *inode, struct file *file) {
 	sess->read_timeout = 0;
 	sess->write_timeout = 0;
 	INIT_LIST_HEAD(&sess->pending_list);
+	INIT_LIST_HEAD(&sess->session_node);
 	mutex_init(&sess->pending_list_mtx);
+	
+	mutex_lock(&inst->msg_list_mtx); //register session in instance object for flush operation
+	list_add(&sess->session_node, &inst->session_list);
+	mutex_unlock(&inst->msg_list_mtx);
 	
 	file->private_data = sess;
 
@@ -129,7 +137,14 @@ static int dev_open(struct inode *inode, struct file *file) {
 static int dev_release(struct inode *inode, struct file *file) {
 	int minor = get_minor(file);
 	session * sess = file->private_data;
+	instance * inst = instances + minor;
+	
 	//remove_works(&sess.pending_list); don't needed if we flush before
+	
+	mutex_lock(&inst->msg_list_mtx); //register session in instance object for flush operation
+	list_del(&sess->session_node);
+	mutex_unlock(&inst->msg_list_mtx);
+	
 	kfree(sess);
 	printk("%s: device file closed with minor: %d\n", MODNAME, minor);
 	return 0;
@@ -143,7 +158,8 @@ static ssize_t dev_write(struct file *filp, const char *buff, size_t len, loff_t
 	work_data * wdata;
 	session * sess = filp->private_data;
 
-	printk("%s: write on dev with [major,minor] number [%d,%d]\n", MODNAME, get_major(filp), get_minor(filp));	
+	printk("%s: write on dev with [major,minor] number [%d,%d] timeout %ld", MODNAME, get_major(filp), get_minor(filp), 
+			sess->write_timeout);	
 
 	node = kmalloc(sizeof(msg_node), GFP_KERNEL);
 	INIT_LIST_HEAD(&node->node);
@@ -203,9 +219,9 @@ static ssize_t dev_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 
 	if (list_empty(&inst->msg_list)) {
 		mutex_unlock(&(inst->msg_list_mtx));
-		printk("%s: msg_list empty\n", MODNAME);
+		printk(KERN_INFO "%s: msg_list empty\n", MODNAME);
 		
-		if (sess->read_timeout == 0) {
+		if (sess->read_timeout == 0) { //no wait
 			return 0;
 		}
 
@@ -257,16 +273,19 @@ static long dev_ioctl(struct file *filp, unsigned int command, unsigned long par
 static int dev_flush(struct file *filp, fl_owner_t id) {
 	int minor = get_minor(filp);
 	instance *inst = instances + minor;
-	session *sess = filp->private_data;
-	printk(KERN_INFO "%s: device flush: minor %d\n", MODNAME, minor);
+	session *sess /*= filp->private_data*/ ;
+	printk("%s: device flush: minor %d\n", MODNAME, minor);
 	
-	// TODO make session->pending_list reachable from instances and flush all sessions
-	mutex_lock(&(sess->pending_list_mtx));
-	if (!list_empty(&sess->pending_list))
-		remove_works(&sess->pending_list); //cancel pending write 
-	mutex_unlock(&(sess->pending_list_mtx));
-	
+	mutex_lock(&inst->msg_list_mtx);
+	list_for_each_entry(sess, &inst->session_list, session_node){
+		mutex_lock(&(sess->pending_list_mtx));
+		if (!list_empty(&sess->pending_list))
+			remove_works(&sess->pending_list); //cancel pending write 
+		mutex_unlock(&(sess->pending_list_mtx));
+	}
+	mutex_unlock(&inst->msg_list_mtx);
 	wake_up(&inst->wait_queue); //wake up reader
+	
 	
 	return 0;
 }
@@ -290,9 +309,10 @@ int init_module(void) {
 
 		instances[i].storage_size = 0;
 		INIT_LIST_HEAD(&instances[i].msg_list);
+		INIT_LIST_HEAD(&instances[i].session_list);
 		init_waitqueue_head(&instances[i].wait_queue);
 	}
-	queue = alloc_workqueue("timed-msg-system", WQ_UNBOUND, 32);
+	queue = alloc_workqueue("timed-msg-system", WQ_UNBOUND, 0);
 
 	Major = __register_chrdev(0, 0, MINORS, DEVICE_NAME, &fops); //allowed minors are directly controlled within this driver
 
