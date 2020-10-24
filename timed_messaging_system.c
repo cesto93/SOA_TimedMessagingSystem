@@ -25,7 +25,7 @@ static ssize_t dev_write(struct file *, const char *, size_t, loff_t *);
 #define get_minor(file)	MINOR(file->f_inode->i_rdev)
 
 typedef struct _instance{ //dev instance data
-	struct mutex msg_list_mtx;
+	spinlock_t msg_list_lock;
 	struct list_head msg_list;
 	struct list_head session_list;
 	wait_queue_head_t wait_queue;
@@ -34,7 +34,7 @@ typedef struct _instance{ //dev instance data
 } instance;
 
 typedef struct _session{  //session data
-	struct mutex pending_list_mtx;
+	spinlock_t pending_list_lock;
 	struct list_head pending_list;
 	struct list_head session_node;
 	long read_timeout;
@@ -65,19 +65,19 @@ void deffered_write(struct delayed_work *work) {
 	session * sess = wdata->sess;
 	msg_node * pending_msg = wdata->my_msg_node;
 	
-	mutex_lock(&(sess->pending_list_mtx));
-	mutex_lock(&(inst->msg_list_mtx));
+	spin_lock(&(sess->pending_list_lock));
+	spin_lock(&(inst->msg_list_lock));
 	
 	if(pending_msg->len + inst->storage_size > max_storage_size) { //no space left on device
-			list_del(&pending_msg->node);
-			mutex_unlock(&(inst->msg_list_mtx));
-			mutex_unlock(&(sess->pending_list_mtx));
+			list_del(&wdata->node);
+			spin_unlock(&(inst->msg_list_lock));
+			spin_unlock(&(sess->pending_list_lock));
 			return;	
 	}
 	
 	inst->storage_size += pending_msg->len;
 	
-	list_move_tail(&pending_msg->node, &inst->msg_list);
+	list_add_tail(&pending_msg->node, &inst->msg_list);
 	list_del(&wdata->node);
 	
 	if (!inst->wake_up_cond) {
@@ -85,8 +85,8 @@ void deffered_write(struct delayed_work *work) {
 		wake_up(&inst->wait_queue);
 	}
 	
-	mutex_unlock(&(inst->msg_list_mtx));
-	mutex_unlock(&(sess->pending_list_mtx));
+	spin_unlock(&(inst->msg_list_lock));
+	spin_unlock(&(sess->pending_list_lock));
 	
 	printk(KERN_INFO "%s: called deffered write msg : %s \n", MODNAME, pending_msg->msg);
 
@@ -127,11 +127,11 @@ static int dev_open(struct inode *inode, struct file *file) {
 	sess->write_timeout = 0;
 	INIT_LIST_HEAD(&sess->pending_list);
 	INIT_LIST_HEAD(&sess->session_node);
-	mutex_init(&sess->pending_list_mtx);
+	spin_lock_init(&sess->pending_list_lock);
 	
-	mutex_lock(&inst->msg_list_mtx); //register session in instance object for flush operation
+	spin_lock(&inst->msg_list_lock); //register session in instance object for flush operation
 	list_add(&sess->session_node, &inst->session_list);
-	mutex_unlock(&inst->msg_list_mtx);
+	spin_unlock(&inst->msg_list_lock);
 	
 	file->private_data = sess;
 
@@ -146,9 +146,9 @@ static int dev_release(struct inode *inode, struct file *file) {
 	
 	//remove_works(&sess.pending_list); don't needed if we flush before
 	
-	mutex_lock(&inst->msg_list_mtx); //register session in instance object for flush operation
+	spin_lock(&inst->msg_list_lock); //register session in instance object for flush operation
 	list_del(&sess->session_node);
-	mutex_unlock(&inst->msg_list_mtx);
+	spin_unlock(&inst->msg_list_lock);
 	
 	kfree(sess);
 	printk("%s: device file closed with minor: %d\n", MODNAME, minor);
@@ -178,10 +178,10 @@ static ssize_t dev_write(struct file *filp, const char *buff, size_t len, loff_t
 	}
 	
 	if (sess->write_timeout == 0) { //istant write
-		mutex_lock(&(inst->msg_list_mtx));
+		spin_lock(&(inst->msg_list_lock));
 		
 		if(node->len + inst->storage_size > max_storage_size) {
-			mutex_unlock(&(inst->msg_list_mtx));
+			spin_unlock(&(inst->msg_list_lock));
 			return -ENOSPC;	//no space left on device
 		}
 		
@@ -193,7 +193,7 @@ static ssize_t dev_write(struct file *filp, const char *buff, size_t len, loff_t
 			wake_up(&inst->wait_queue);
 		}
 		
-		mutex_unlock(&(inst->msg_list_mtx));
+		spin_unlock(&(inst->msg_list_lock));
 		
 	} else { //deferred write
 		
@@ -205,9 +205,9 @@ static ssize_t dev_write(struct file *filp, const char *buff, size_t len, loff_t
 		INIT_DELAYED_WORK(&wdata->my_work, (void *) deffered_write);
 		
 		//queuing req need lock
-		mutex_lock(&(sess->pending_list_mtx));
+		spin_lock(&(sess->pending_list_lock));
 		list_add(&wdata->node, &sess->pending_list);
-		mutex_unlock(&(sess->pending_list_mtx));
+		spin_unlock(&(sess->pending_list_lock));
 		
 		queue_delayed_work(queue, &wdata->my_work, sess->write_timeout); //schedule write
 	}
@@ -225,12 +225,12 @@ static ssize_t dev_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 
 	printk("%s: read on dev with [major,minor] number [%d,%d] ", MODNAME, get_major(filp), get_minor(filp));
 
-	mutex_lock(&(inst->msg_list_mtx));
+	spin_lock(&(inst->msg_list_lock));
 
 	if (list_empty(&inst->msg_list)) {
 		inst->wake_up_cond = 0;
 		
-		mutex_unlock(&(inst->msg_list_mtx));
+		spin_unlock(&(inst->msg_list_lock));
 		printk(KERN_INFO "%s: msg_list empty\n", MODNAME);
 		
 		if (sess->read_timeout == 0) { //no wait
@@ -240,7 +240,7 @@ static ssize_t dev_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 		if (wait_event_timeout(inst->wait_queue, inst->wake_up_cond, sess->read_timeout) == 0 || list_empty(&inst->msg_list)) {
 			return 0;
 		}
-		mutex_lock(&(inst->msg_list_mtx));
+		spin_lock(&(inst->msg_list_lock));
 	}
 	
 	//get the msg
@@ -248,7 +248,7 @@ static ssize_t dev_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 	list_del(inst->msg_list.next);
 	inst->storage_size -= my_msg_node->len; //decrease storage size
 	
-	mutex_unlock(&(inst->msg_list_mtx));
+	spin_unlock(&(inst->msg_list_lock));
 	
 	if (len > my_msg_node->len)
 		len = my_msg_node->len;
@@ -266,7 +266,7 @@ static long dev_ioctl(struct file *filp, unsigned int command, unsigned long par
 	int nr = _IOC_NR(command);
 	session *sess = filp->private_data;
 	
-	mutex_lock(&(sess->pending_list_mtx));
+	spin_lock(&(sess->pending_list_lock));
 	
 	switch(nr) {
 		case SET_SEND_TIMEOUT: sess->write_timeout = param; break;
@@ -274,7 +274,7 @@ static long dev_ioctl(struct file *filp, unsigned int command, unsigned long par
 		case REVOKE_DELAYED_MESSAGES: remove_works(&sess->pending_list); break;
 		default: return -1;
 	}
-	mutex_unlock(&(sess->pending_list_mtx));
+	spin_unlock(&(sess->pending_list_lock));
 	
 	printk(KERN_INFO "%s: ioctl on dev with [major,minor] number [%d,%d] nr %u param %lu \n", 
 			MODNAME, get_major(filp), minor, nr, param);
@@ -288,15 +288,15 @@ static int dev_flush(struct file *filp, fl_owner_t id) {
 	session *sess;
 	printk("%s: device flush: minor %d\n", MODNAME, minor);
 	
-	mutex_lock(&inst->msg_list_mtx);
+	spin_lock(&inst->msg_list_lock);
 	list_for_each_entry(sess, &inst->session_list, session_node){
-		mutex_lock(&(sess->pending_list_mtx));
+		spin_lock(&(sess->pending_list_lock));
 		if (!list_empty(&sess->pending_list))
 			remove_works(&sess->pending_list); //cancel pending write 
-		mutex_unlock(&(sess->pending_list_mtx));
+		spin_unlock(&(sess->pending_list_lock));
 	}
 	inst->wake_up_cond = true;
-	mutex_unlock(&inst->msg_list_mtx);
+	spin_unlock(&inst->msg_list_lock);
 	
 	wake_up_all(&inst->wait_queue); //wake up reader
 	
@@ -319,7 +319,7 @@ int init_module(void) {
 
 	//initialize the drive internal state
 	for(i = 0; i < MINORS; i++) {
-		mutex_init(&(instances[i].msg_list_mtx));
+		spin_lock_init(&(instances[i].msg_list_lock));
 
 		instances[i].storage_size = 0;
 		INIT_LIST_HEAD(&instances[i].msg_list);
