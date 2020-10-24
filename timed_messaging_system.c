@@ -30,6 +30,7 @@ typedef struct _instance{ //dev instance data
 	struct list_head session_list;
 	wait_queue_head_t wait_queue;
 	long storage_size;
+	bool wake_up_cond;
 } instance;
 
 typedef struct _session{  //session data
@@ -78,6 +79,11 @@ void deffered_write(struct delayed_work *work) {
 	
 	list_move_tail(&pending_msg->node, &inst->msg_list);
 	list_del(&wdata->node);
+	
+	if (!inst->wake_up_cond) {
+		inst->wake_up_cond = true;
+		wake_up(&inst->wait_queue);
+	}
 	
 	mutex_unlock(&(inst->msg_list_mtx));
 	mutex_unlock(&(sess->pending_list_mtx));
@@ -182,6 +188,11 @@ static ssize_t dev_write(struct file *filp, const char *buff, size_t len, loff_t
 		list_add_tail(&node->node, &inst->msg_list);
 		inst->storage_size += node->len;
 		
+		if (!inst->wake_up_cond) {
+			inst->wake_up_cond = true;
+			wake_up(&inst->wait_queue);
+		}
+		
 		mutex_unlock(&(inst->msg_list_mtx));
 		
 	} else { //deferred write
@@ -217,14 +228,16 @@ static ssize_t dev_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 	mutex_lock(&(inst->msg_list_mtx));
 
 	if (list_empty(&inst->msg_list)) {
+		inst->wake_up_cond = 0;
+		
 		mutex_unlock(&(inst->msg_list_mtx));
 		printk(KERN_INFO "%s: msg_list empty\n", MODNAME);
 		
 		if (sess->read_timeout == 0) { //no wait
 			return 0;
 		}
-
-		if (wait_event_timeout(inst->wait_queue, !list_empty(&inst->msg_list), sess->read_timeout) == 0) {
+		
+		if (wait_event_timeout(inst->wait_queue, inst->wake_up_cond, sess->read_timeout) == 0 || list_empty(&inst->msg_list)) {
 			return 0;
 		}
 		mutex_lock(&(inst->msg_list_mtx));
@@ -272,7 +285,7 @@ static long dev_ioctl(struct file *filp, unsigned int command, unsigned long par
 static int dev_flush(struct file *filp, fl_owner_t id) {
 	int minor = get_minor(filp);
 	instance *inst = instances + minor;
-	session *sess /*= filp->private_data*/ ;
+	session *sess;
 	printk("%s: device flush: minor %d\n", MODNAME, minor);
 	
 	mutex_lock(&inst->msg_list_mtx);
@@ -282,8 +295,10 @@ static int dev_flush(struct file *filp, fl_owner_t id) {
 			remove_works(&sess->pending_list); //cancel pending write 
 		mutex_unlock(&(sess->pending_list_mtx));
 	}
+	inst->wake_up_cond = true;
 	mutex_unlock(&inst->msg_list_mtx);
-	wake_up(&inst->wait_queue); //wake up reader
+	
+	wake_up_all(&inst->wait_queue); //wake up reader
 	
 	
 	return 0;
@@ -310,6 +325,7 @@ int init_module(void) {
 		INIT_LIST_HEAD(&instances[i].msg_list);
 		INIT_LIST_HEAD(&instances[i].session_list);
 		init_waitqueue_head(&instances[i].wait_queue);
+		instances[i].wake_up_cond = false;
 	}
 	queue = alloc_workqueue("timed-msg-system", WQ_UNBOUND, 0);
 

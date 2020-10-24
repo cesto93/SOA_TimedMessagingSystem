@@ -13,10 +13,9 @@ int major;
 int w_timeout = 0;
 
 #define MAXSIZE 4096
-#define W_MSG 10
-#define THREAD_PER_NODE 3
-
-//#define RVK_MSG
+#define W_MSG 1
+#define THREAD_PER_NODE 1
+#define PHANTOM_WRITE 1
 
 struct t_data {
 	char *device;
@@ -56,11 +55,45 @@ void *writing(void * tdata){
 		usleep(5000);
 	}
 	
-	#ifdef RVK_MSG
+	return NULL;
+}
+
+void *phantom_writing(void * tdata){
+	char* device;
+	int fd;
+	
+	struct t_data * my_data = (struct t_data *) tdata; 
+	device = my_data->device;
+	int pos = my_data->pos;
+	
+	char * msg = alloca(50);
+	
+	printf("opening device %s\n", device);
+	fd = open(device, O_RDWR);
+	if (fd == -1) {
+		printf("open error on device %s\n", device);
+		return NULL;
+	}
+	printf("device %s successfully opened\n", device);
+	
+	if (ioctl(fd, SET_SEND_TIMEOUT_NR(major), w_timeout) == -1) {
+		printf("error in ioctl on device %s\n", device);
+	}
+
+	for (int i = 0; i < W_MSG; i++) {
+		int len = sprintf(msg, "phantom_msg%d_%d", pos, i);
+		int ret = write(fd, msg, len);
+		if (ret == -1) {
+			puts("error in write");
+		} else {
+			printf("writed: %s\n", msg);
+		}
+		usleep(5000);
+	}
+	
 	if (ioctl(fd, REVOKE_DELAYED_MESSAGES_NR(major), w_timeout) == -1) {
 		printf("error in ioctl on device %s\n", device);
 	}
-	#endif
 	
 	return NULL;
 }
@@ -83,7 +116,7 @@ int main(int argc, char** argv){
 		w_timeout = strtol(argv[4], NULL, 10);
 	}
 	
-	pthread_t * tids = malloc(sizeof(pthread_t) * minors * THREAD_PER_NODE);
+	pthread_t * tids = malloc(sizeof(pthread_t) * minors * (THREAD_PER_NODE + PHANTOM_WRITE) );
     printf("creating %d minors for device %s with major %d\n", minors, path, major);
 	
     for (int i = 0; i < minors; i++) {
@@ -94,8 +127,11 @@ int main(int argc, char** argv){
 		for (int j = 0; j < THREAD_PER_NODE; j++) {
 			pthread_create(&tids[i + j], NULL, writing, data);
 		}
+		for (int j = 0; j < PHANTOM_WRITE; j++) {
+			pthread_create(&tids[i + THREAD_PER_NODE - 1 + j], NULL, phantom_writing, data);
+		}
     }
-    for (int i = 0; i < minors * THREAD_PER_NODE; i++) {
+    for (int i = 0; i < minors * (THREAD_PER_NODE + PHANTOM_WRITE); i++) {
 		pthread_join(tids[i], NULL);
 	}
 	pause();

@@ -13,8 +13,8 @@ int major;
 int r_timeout = 0;
 
 #define MAXSIZE 4096
-#define R_MSG 20
-#define THREAD_PER_NODE 3
+#define R_MSG 1
+#define THREAD_PER_NODE 1
 
 void *reading(void * path){
 	char * device;

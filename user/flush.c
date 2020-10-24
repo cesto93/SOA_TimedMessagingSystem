@@ -38,8 +38,6 @@ int main(int argc, char** argv){
 	pthread_t * tids = malloc(sizeof(pthread_t) * minors);
 	buff = malloc(strlen(path) + 10);
 	
-    printf("creating %d minors for device %s\n", minors, path);
-	
     for (int i = 0; i < minors; i++) {
 		sprintf(buff, "%s%d", path, i);
 		pthread_create(&tids[i], NULL, flushing, strdup(buff));
