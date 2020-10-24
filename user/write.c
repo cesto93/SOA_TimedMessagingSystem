@@ -13,7 +13,7 @@ int major;
 int w_timeout = 0;
 
 #define MAXSIZE 4096
-#define W_MSG 1
+#define W_MSG 50
 #define THREAD_PER_NODE 1
 #define PHANTOM_WRITE 1
 
@@ -74,7 +74,6 @@ void *phantom_writing(void * tdata){
 		printf("open error on device %s\n", device);
 		return NULL;
 	}
-	printf("device %s successfully opened\n", device);
 	
 	if (ioctl(fd, SET_SEND_TIMEOUT_NR(major), w_timeout) == -1) {
 		printf("error in ioctl on device %s\n", device);
@@ -88,7 +87,6 @@ void *phantom_writing(void * tdata){
 		} else {
 			printf("writed: %s\n", msg);
 		}
-		usleep(5000);
 	}
 	
 	if (ioctl(fd, REVOKE_DELAYED_MESSAGES_NR(major), w_timeout) == -1) {

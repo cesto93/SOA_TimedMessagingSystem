@@ -13,7 +13,7 @@ int major;
 int r_timeout = 0;
 
 #define MAXSIZE 4096
-#define R_MSG 1
+#define R_MSG 50
 #define THREAD_PER_NODE 1
 
 void *reading(void * path){
@@ -30,7 +30,6 @@ void *reading(void * path){
 		printf("open error on device %s\n", device);
 		return NULL;
 	}
-	printf("device %s successfully opened\n", device);
 	
 	if (ioctl(fd, SET_RECV_TIMEOUT_NR(major), r_timeout) == -1) {
 		printf("error in ioctl on device %s\n", device);
@@ -39,6 +38,7 @@ void *reading(void * path){
 	msg = malloc(MAXSIZE);
 	for (int i = 0; i < R_MSG; i++) { 
 		size = read(fd, msg, MAXSIZE);
+		msg[size] = '\0';
 		 if (size != 0) {
 			printf("readed on dev %s: %s\n", device, msg);
 		 } else {
